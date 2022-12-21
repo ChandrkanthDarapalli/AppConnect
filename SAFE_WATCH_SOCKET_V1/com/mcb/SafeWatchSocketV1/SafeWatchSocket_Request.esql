@@ -1,0 +1,56 @@
+
+BROKER SCHEMA com.mcb.SafeWatchSocketV1
+PATH com.mcb.logging;
+
+CREATE COMPUTE MODULE SafeWatchSocket_Request
+	DECLARE comRef REFERENCE TO Environment.CARD.JSON.Data.CONFIG_FILE.COMMON;
+	DECLARE basicRef REFERENCE TO Environment.CARD.JSON.Data.CONFIG_FILE.SAFE_WATCH_SOCKET_V1.BASIC;
+
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		CALL CopyEntireMessage();
+		RETURN TRUE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		SET Environment.MQRFH2 = InputRoot.MQRFH2;
+		SET Environment.MQMD = InputRoot.MQMD;
+		DECLARE inputChar, outputChar CHARACTER '';
+		DECLARE outRefer REFERENCE TO OutputRoot;
+		DECLARE inpref REFERENCE TO InputRoot.JSON.Data;
+		SET Environment.Variable.channelType = InputRoot.MQRFH2.usr.ESB_ReplyProtocol;
+		SET Environment.correlationId = InputRoot.MQMD.CorrelId;
+		SET Environment.Variables.applicationName = InputRoot.MQRFH2.usr.Method;
+		SET Environment.Variables.channelName = InputRoot.MQRFH2.usr.Channel;
+
+		SET inputChar = CAST(ASBITSTREAM(InputRoot.JSON) AS CHARACTER CCSID InputRoot.Properties.CodedCharSetId ENCODING InputRoot.Properties.Encoding);
+        -- As-Is  request logging
+ 		CALL GenarateDBLogMessage2(Environment.Variables.channelName, Environment.Variables.applicationName, CAST(Environment.correlationId AS CHARACTER), '', CURRENT_TIMESTAMP, 'Info', comRef.WEB_SERVICE, Environment.Variable.channelType, basicRef.APPLICATION_IDENTIFIER, 'InputMsg', inputChar, outRefer);
+		PROPAGATE TO LABEL 'LOGGING';
+		
+        DECLARE inRef REFERENCE TO InputRoot.JSON.Data.Safe_Watch_Socket_Req;
+       
+	--    SET inputChar = CAST('10.143.4.122' AS CHARACTER) || '|' || CAST('8409' AS CHARACTER) || '|' || CAST('Safewatch API' AS CHARACTER) || '|' || CAST(inRef.User AS CHARACTER) || '|' || CAST(inRef.Password AS CHARACTER) || '|' || CAST(inRef.Zone_Id AS CHARACTER) || '|' || CAST(inRef.Data AS CHARACTER) || '|' || CAST(inRef.Address AS CHARACTER) || '|' || CAST(inRef.Bic AS CHARACTER) || '|' || CAST(inRef.City AS CHARACTER) || '|' || CAST(inRef.Context AS CHARACTER) || '|' || CAST(inRef.Country AS CHARACTER) || '|' || CAST(inRef.Format AS CHARACTER) || '|' || CAST(inRef.Record_Id AS CHARACTER) || '|' || CAST(inRef.Record_Location AS CHARACTER) || '|' || CAST(inRef.Scan_Session_Id AS CHARACTER) || '|' || CAST(inRef.Rank AS CHARACTER) || '|' || CAST(inRef.Check_Vessels AS CHARACTER) || '|' || CAST(inRef.Check_Country AS CHARACTER) || '|' || CAST(inRef.Positive_Detection AS CHARACTER) || '|' || CAST(inRef.Full_Report AS CHARACTER) || '|' || CAST(inRef.Auto_Create_Alert AS CHARACTER);
+		-- BuildSafeWatchSocketReq logging
+	--	CALL GenarateDBLogMessage2(Environment.Variables.channelName, Environment.Variables.applicationName, CAST(Environment.correlationId AS CHARACTER), '', CURRENT_TIMESTAMP, 'Info', comRef.WEB_SERVICE, Environment.Variable.channelType, basicRef.APPLICATION_IDENTIFIER, 'BuildSafeWatchSocketReq', inputChar, outRefer);
+	--	PROPAGATE TO LABEL 'LOGGING';
+		
+		SET Environment.ResultSet.xml = safeWatchProcessing('10.143.4.122', '8409', 'Safewatch API', inRef.User, inRef.Password, inRef.Zone_Id, inRef.Data, inRef.Address, inRef.Bic, inRef.City, inRef.Context, inRef.Country, inRef.Format, inRef.Record_Id, inRef.Record_Location, inRef.Scan_Session_Id, inRef.Rank, inRef.Check_Vessels, inRef.Check_Country, CAST(inRef.Positive_Detection AS BOOLEAN), CAST(inRef.Full_Report AS BOOLEAN), CAST(inRef.Auto_Create_Alert AS BOOLEAN));
+
+		SET OutputRoot.JSON.Data.SafeWatchSocket_Resp = Environment.ResultSet.xml;
+		SET outputChar = CAST(ASBITSTREAM(OutputRoot.JSON) AS CHARACTER CCSID InputRoot.Properties.CodedCharSetId ENCODING InputRoot.Properties.Encoding);
+		 -- SafeWatchSocketResp logging
+		 CALL GenarateDBLogMessage2(Environment.Variables.channelName, Environment.Variables.applicationName, CAST(Environment.correlationId AS CHARACTER), '', CURRENT_TIMESTAMP, 'Info', comRef.WEB_SERVICE, Environment.Variable.channelType, basicRef.APPLICATION_IDENTIFIER, 'SafeWatchSocketResp', outputChar, outRefer);
+		PROPAGATE TO LABEL 'LOGGING';
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('XMLNSC') PARSE(Environment.ResultSet.xml ENCODING InputRoot.Properties.Encoding CCSID InputRoot.Properties.CodedCharSetId);
+
+	END;
+END MODULE;
+
+CREATE PROCEDURE safeWatchProcessing(IN ip CHARACTER, IN port CHARACTER, IN fileName CHARACTER, IN username CHARACTER, IN password CHARACTER, IN zoneId CHARACTER, IN data CHARACTER, IN address CHARACTER, IN bic CHARACTER, IN city CHARACTER, IN context CHARACTER, IN country CHARACTER, IN format CHARACTER, IN recordId CHARACTER, IN recordLocation CHARACTER, IN scanSessionId CHARACTER, IN rank CHARACTER, IN checkVessels CHARACTER, IN checkCountry CHARACTER, IN positiveDetection BOOLEAN, IN fullReport BOOLEAN, IN autoCreateAlert BOOLEAN)
+RETURNS CHARACTER
+LANGUAGE JAVA
+EXTERNAL NAME "com.mcb.SafeWatchSocket.SafeWatchSocket.safeWatchProcessing";
+
+

@@ -1,0 +1,164 @@
+
+BROKER SCHEMA com.mcb.SafeWatchSocketV1
+PATH com.mcb.logging;
+
+CREATE COMPUTE MODULE SafeWatchSocket_Response
+	DECLARE comRef REFERENCE TO Environment.CARD.JSON.Data.CONFIG_FILE.COMMON;
+	DECLARE basicRef REFERENCE TO Environment.CARD.JSON.Data.CONFIG_FILE.SAFE_WATCH_SOCKET_V1.BASIC;
+
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		CALL CopyEntireMessage();
+		RETURN TRUE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		DECLARE outRefer REFERENCE TO OutputRoot;
+		DECLARE inputChar, outputChar CHARACTER '';
+		IF EXISTS(InputExceptionList.[]) THEN
+			IF CONTAINS(Environment.variable.exceptiondesc, 'ParserException') THEN
+				SET inputChar = 'unable to parse the data';
+			ELSEIF CONTAINS(Environment.variable.exceptiondesc, 'SocketException')THEN
+				SET inputChar = 'No connection could be made because the target machine actively refused it';
+			ELSE
+				SET inputChar = CAST(ASBITSTREAM(InputRoot.JSON) AS CHARACTER CCSID InputRoot.Properties.CodedCharSetId ENCODING InputRoot.Properties.Encoding);
+			END IF;
+			/*DB Logging the exception message*/
+			SET inputChar = COALESCE(inputChar, 'emptydata or unable to parse the data');
+			CALL GenarateDBLogMessage2(Environment.Variables.channelName, Environment.Variables.applicationName, CAST(Environment.correlationId AS CHARACTER), '', CURRENT_TIMESTAMP, 'Error', comRef.WEB_SERVICE, 'Java', basicRef.APPLICATION_IDENTIFIER, 'Ace_Exception', Environment.variable.exceptiondesc, outRefer);
+			PROPAGATE TO LABEL 'LOGGING';
+			/*Framing the failure JSON Response*/
+			SET OutputRoot.JSON.Data.StatusCode = '504';
+			CREATE FIELD OutputRoot.JSON.Data.PayLoad.Errors IDENTITY (JSON.Array)Errors;
+			SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode = '-1';
+			SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorMsg = COALESCE(inputChar, 'GATEWAY_TIMEOUT');
+		ELSEIF EXISTS(InputRoot.XMLNSC[]) THEN
+			DECLARE inRef REFERENCE TO InputRoot.XMLNSC;
+
+			IF FIELDNAME(inRef.*[>]) = 'LOGIN' THEN
+				SET OutputRoot.JSON.Data.StatusCode = '-1';
+				CREATE FIELD OutputRoot.JSON.Data.PayLoad.Errors IDENTITY (JSON.Array)Errors;
+				SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode = COALESCE(inRef.LOGIN.LastErrorCode, -1);
+				SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorMsg = inRef.LOGIN.LastErrorText;
+				SET inputChar = 'Login response code: FAILED';
+				CALL GenarateDBLogMessage2(Environment.Variables.channelName, Environment.Variables.applicationName, CAST(Environment.correlationId AS CHARACTER), '', CURRENT_TIMESTAMP, 'Info', comRef.WEB_SERVICE, Environment.Variable.channelType, basicRef.APPLICATION_IDENTIFIER, 'SafeWatchAPILogin_Status', inputChar, outRefer);
+				PROPAGATE TO LABEL 'LOGGING';
+
+			ELSE
+				SET inputChar = 'Login response code: SUCCESS';
+				CALL GenarateDBLogMessage2(Environment.Variables.channelName, Environment.Variables.applicationName, CAST(Environment.correlationId AS CHARACTER), '', CURRENT_TIMESTAMP, 'Info', comRef.WEB_SERVICE, Environment.Variable.channelType, basicRef.APPLICATION_IDENTIFIER, 'SafeWatchAPILogin_Status', inputChar, outRefer);
+				PROPAGATE TO LABEL 'LOGGING';
+
+				IF inRef.SCAN.LastErrorCode = '0' THEN
+					DECLARE I, J INTEGER 1;
+					CREATE LASTCHILD OF OutputRoot DOMAIN 'JSON';
+					CREATE LASTCHILD OF OutputRoot.JSON NAME 'Data';
+					DECLARE outRef REFERENCE TO OutputRoot.JSON.Data;
+
+					SET outRef.StatusCode = '200';
+					SET outRef.PayLoad.Scan.Profile_Name = COALESCE(inRef.SCAN.ProfileName, '');
+					SET outRef.PayLoad.Scan.List_Set_Id = COALESCE(inRef.SCAN.ListSetID, '');
+					SET outRef.PayLoad.Scan.Detection_Id = COALESCE(inRef.SCAN.DetectionID, '');
+					SET outRef.PayLoad.Scan.Accept_Count = COALESCE(inRef.SCAN.AcceptCount, '');
+					SET outRef.PayLoad.Scan.External_Count = COALESCE(inRef.SCAN.ExternalCount, '');
+					SET outRef.PayLoad.Scan.Violation_Count = COALESCE(inRef.SCAN.ViolationCount, '');
+					SET outRef.PayLoad.Scan.Detection_Error_Code = COALESCE(inRef.SCAN.DetectionErrorCode, '');
+					SET outRef.PayLoad.Scan.Detection_Error_Text = COALESCE(inRef.SCAN.DetectionErrorText, '');
+					SET outRef.PayLoad.Scan.Global_Status = COALESCE(inRef.SCAN.GlobalStatus, '');
+					SET outRef.PayLoad.Scan.Alert_Count = COALESCE(inRef.SCAN.AlertCount, '');
+					CREATE FIELD outRef.PayLoad.Scan.Alerts IDENTITY(JSON.Array)Alerts;
+					DECLARE inAlertsList REFERENCE TO inRef.SCAN.Alerts.Alert[>];
+					WHILE LASTMOVE(inAlertsList) DO
+						SET outRef.PayLoad.Scan.Alerts.Item[I].Alert_Id = COALESCE(FIELDVALUE(inAlertsList.(XMLNSC.Attribute)AlertId), '');
+						SET outRef.PayLoad.Scan.Alerts.Item[I].Alert_Status = COALESCE(FIELDVALUE(inAlertsList.(XMLNSC.Attribute)Status), '');
+						MOVE inAlertsList NEXTSIBLING REPEAT TYPE NAME;
+						SET I = I + 1;
+					END WHILE;
+					SET I = 1;
+					CREATE FIELD outRef.PayLoad.Scan.Reports IDENTITY(JSON.Array)Reports;
+					DECLARE inRecordsList REFERENCE TO inRef.SCAN.Reports.Report[>];
+					WHILE LASTMOVE(inRecordsList) DO
+						SET outRef.PayLoad.Scan.Reports.Item[I].Status = COALESCE(inRecordsList.Status, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Data = COALESCE(inRecordsList.Data, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Match = COALESCE(inRecordsList.Match, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Input_Bic = COALESCE(inRecordsList.InputBIC, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Input_Address = COALESCE(inRecordsList.InputAddress, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Input_City = COALESCE(inRecordsList.InputCity, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Input_Country = COALESCE(inRecordsList.InputCountry, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Rank = COALESCE(inRecordsList.Rank, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].List_Name = COALESCE(inRecordsList.ListName, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].List_Date = COALESCE(REPLACE(CAST(FIELDVALUE(inRecordsList.ListDate) AS CHARACTER), '\/', '/'), '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Entity_Id = COALESCE(inRecordsList.EntityId, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Category = COALESCE(inRecordsList.Category, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Remark = COALESCE(inRecordsList.Remark, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Title = COALESCE(inRecordsList.Title, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Begin_Position = COALESCE(inRecordsList.BeginPosition, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].End_Position = COALESCE(inRecordsList.EndPosition, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Field = COALESCE(inRecordsList.Field, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Line = COALESCE(inRecordsList.Line, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].Program = COALESCE(inRecordsList.Program, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].DOB = COALESCE(inRecordsList.DOB, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].POB = COALESCE(inRecordsList.POB, '');
+						SET outRef.PayLoad.Scan.Reports.Item[I].External_Id = COALESCE(inRecordsList.ExternalId, '');
+
+						IF EXISTS(inRef.SCAN.Reports.Report.Entities.Entity[]) THEN
+							CREATE FIELD outRef.PayLoad.Scan.Reports.Item[I].Entities IDENTITY(JSON.Array)Entities;
+							DECLARE inEntityList REFERENCE TO inRef.SCAN.Reports.Report.Entities.Entity[>];
+							WHILE LASTMOVE(inEntityList) DO
+								SET outRef.PayLoad.Scan.Reports.Item[I].Entities.Item[J].Name_Type = COALESCE(FIELDVALUE(inEntityList.(XMLNSC.Attribute)NameType), '');
+								SET outRef.PayLoad.Scan.Reports.Item[I].Entities.Item[J].Name = COALESCE(FIELDVALUE(inEntityList.(XMLNSC.Attribute)Name), '');
+								MOVE inEntityList NEXTSIBLING REPEAT TYPE NAME;
+								SET J = J + 1;
+							END WHILE;
+						END IF;
+						SET J = 1;
+
+						IF EXISTS(inRef.SCAN.Reports.Report.Addresses.Address[]) THEN
+							CREATE FIELD outRef.PayLoad.Scan.Reports.Item[I].Addresses IDENTITY(JSON.Array)Addresses;
+							DECLARE inAddressList REFERENCE TO inRef.SCAN.Reports.Report.Addresses.Address[>];
+							WHILE LASTMOVE(inAddressList) DO
+								SET outRef.PayLoad.Scan.Reports.Item[I].Addresses.Item[J].Address = COALESCE(inAddressList.Address, '');
+								SET outRef.PayLoad.Scan.Reports.Item[I].Addresses.Item[J].City = COALESCE(inAddressList.City, '');
+								SET outRef.PayLoad.Scan.Reports.Item[I].Addresses.Item[J].Country = COALESCE(inAddressList.Country, '');
+								MOVE inAddressList NEXTSIBLING REPEAT TYPE NAME;
+								SET J = J + 1;
+							END WHILE;
+						END IF;
+
+						MOVE inRecordsList NEXTSIBLING REPEAT TYPE NAME;
+						SET I = I + 1;
+					END WHILE;
+
+				ELSE
+					SET OutputRoot.JSON.Data.StatusCode = '200';
+					CREATE FIELD OutputRoot.JSON.Data.PayLoad.Errors IDENTITY (JSON.Array)Errors;
+					SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode = COALESCE(inRef.SCAN.LastErrorCode, -1);
+					SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorMsg = inRef.SCAN.LastErrorText;
+				END IF;
+			END IF;
+
+		ELSE
+			SET OutputRoot.MQRFH2 = NULL;
+			SET OutputRoot.JSON.Data.StatusCode = '504';
+			CREATE FIELD OutputRoot.JSON.Data.Payload.Errors IDENTITY (JSON.Array)Errors;
+			SET OutputRoot.JSON.Data.Payload.Errors.Item[1].ErrorCode = '-1';
+			SET OutputRoot.JSON.Data.Payload.Errors.Item[1].ErrorMsg = 'GATEWAY_TIMEOUT';
+		END IF;
+
+		CREATE FIRSTCHILD OF Environment DOMAIN 'JSON';
+		SET Environment.JSON = OutputRoot.JSON;
+
+		SET outputChar = CAST(ASBITSTREAM(OutputRoot.JSON) AS CHARACTER CCSID 1208 ENCODING 546);
+		SET OutputRoot = NULL;
+		CALL GenarateDBLogMessage2(Environment.Variables.channelName, Environment.Variables.applicationName, CAST(Environment.correlationId AS CHARACTER), '', CURRENT_TIMESTAMP, 'Info', comRef.WEB_SERVICE, Environment.Variable.channelType, basicRef.APPLICATION_IDENTIFIER, 'OutputMsg', outputChar, outRefer);
+		PROPAGATE TO LABEL 'LOGGING';
+
+		SET OutputRoot = NULL;
+		SET OutputRoot.MQMD = Environment.MQMD;
+		SET OutputRoot.MQRFH2 = Environment.MQRFH2;
+		SET OutputRoot.JSON = Environment.JSON;
+
+		SET OutputLocalEnvironment.Destination.MQ.DestinationData[1].queueName = comRef.OUTWARD_GATEWAY_Q;
+
+	END;
+END MODULE;
