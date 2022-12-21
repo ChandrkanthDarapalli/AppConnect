@@ -1,0 +1,143 @@
+
+BROKER SCHEMA com.mcb.SafeWatchTcpip
+PATH com.mcb.logging,com.mcb.procedures,com.mcb.common;
+
+CREATE COMPUTE MODULE SafeWatchTcpip_Response
+	DECLARE comRef REFERENCE TO Environment.CARD.JSON.Data.CONFIG_FILE.COMMON;
+	DECLARE basicRef REFERENCE TO Environment.CARD.JSON.Data.CONFIG_FILE.SAFE_WATCH_SOCKET_TCPIP_GATEWAY.BASIC;
+
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		CALL buildResponse();
+		RETURN TRUE;
+	END;
+
+	CREATE PROCEDURE buildResponse() BEGIN
+		DECLARE headerFinder CHARACTER Environment.OutData.MQRFH2.usr.ESB_ReplyProtocol;
+		DECLARE requestTime TIMESTAMP InputRoot.Properties.CreationTime;
+		DECLARE inputChar, outputChar, Response_Length, delimitResp CHARACTER;
+		DECLARE Delimiter1 CHARACTER '|';
+		-------DECLARING HEADERLENGTH TO RETURN TO T24-----------
+		DECLARE HeaderLength CHARACTER '0000000000';
+		DECLARE outRefer REFERENCE TO OutputRoot;
+		CASE
+		WHEN EXISTS(InputExceptionList.[]) THEN
+			IF CONTAINS(Environment.variable.exceptiondesc, 'ParserException') THEN
+				SET inputChar = 'unable to parse the data';
+			ELSE
+				IF FIELDNAME(InputBody) = 'JSON' AND EXISTS(InputRoot.JSON.*[]) THEN
+					SET inputChar = CAST(ASBITSTREAM(InputRoot.JSON) AS CHARACTER CCSID InputRoot.Properties.CodedCharSetId ENCODING InputRoot.Properties.Encoding);
+				END IF;
+			END IF;
+
+			SET inputChar = COALESCE(inputChar, 'emptydata or unable to parse the data');
+			CALL GenarateDBLogMessage2(Environment.Variables.channelName, Environment.Variables.applicationName, CAST(Environment.Variables.correlationId AS CHARACTER) , '', CURRENT_TIMESTAMP, 'Error', comRef.WEB_SERVICE, Environment.Variables.Reply_Protocol, basicRef.APPLICATION_IDENTIFIER, 'Ace_Exception', inputChar, outRefer);
+			PROPAGATE TO LABEL 'LOGGING';
+
+			SET OutputRoot.JSON.Data.StatusCode = '1';
+			CREATE FIELD OutputRoot.JSON.Data.PayLoad.Errors IDENTITY (JSON.Array)Errors;
+			SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode = 'GATEWAY_TIMEOUT';
+
+			SET delimitResp = COALESCE(OutputRoot.JSON.Data.StatusCode, '') || Delimiter1;
+			SET delimitResp = delimitResp || COALESCE(OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode, '') || Delimiter1 || Delimiter1 || Delimiter1 || Delimiter1|| Delimiter1|| Delimiter1|| Delimiter1;
+
+		WHEN EXISTS(InputRoot.JSON[]) THEN
+			SET inputChar = CAST(ASBITSTREAM(InputRoot.JSON) AS CHARACTER CCSID InputRoot.Properties.CodedCharSetId ENCODING InputRoot.Properties.Encoding);
+			-- Calling to DB audit logging
+			CALL GenarateDBLogMessage2(Environment.OutData.MQRFH2.usr.Channel,Environment.OutData.MQRFH2.usr.Method,CAST(Environment.Variables.correlationId AS CHARACTER), '', CURRENT_TIMESTAMP, 'Info', comRef.WEB_SERVICE, Environment.Variables.Reply_Protocol, basicRef.APPLICATION_IDENTIFIER, 'SafeWatchSocketV1Resp', inputChar, outRefer);
+			PROPAGATE TO LABEL 'LOGGING';
+			SET OutputRoot = NULL;
+
+			IF EXISTS(InputRoot.JSON.Data.PayLoad.Errors[]) THEN
+				CREATE FIELD OutputRoot.JSON.Data.PayLoad.Errors IDENTITY (JSON.Array)Errors;
+				SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode = InputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode;
+				SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorMsg = InputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorMsg;
+
+				SET delimitResp = COALESCE(OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode, '1') || Delimiter1;
+				SET delimitResp = delimitResp || COALESCE(OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorMsg, '') || Delimiter1 || Delimiter1 || Delimiter1 || Delimiter1|| Delimiter1|| Delimiter1|| Delimiter1;
+			ELSE
+
+				DECLARE I, J INTEGER 1;
+				DECLARE Delimter1 CHARACTER ']';
+				DECLARE Delimter2 CHARACTER '^';
+				DECLARE Delimter3 CHARACTER '|';
+				DECLARE Delimter4 CHARACTER '~';
+				DECLARE resp, respAlertId, respAlertStat, respRecordsList, respEntityNameType, respEntityName, respAddressAddress, respAddressCity, respAddressCountry CHARACTER;
+				DECLARE inRef REFERENCE TO InputRoot.JSON.Data.PayLoad.Scan;
+
+				SET resp = '0' || Delimter1 || '' || Delimter1 || COALESCE(inRef.Profile_Name, '') || Delimter1 || COALESCE(inRef.List_Set_Id, '') || Delimter1 || COALESCE(inRef.Detection_Id, '') || Delimter1 || COALESCE(inRef.Accept_Count, '') || Delimter1 || COALESCE(inRef.External_Count, '') || Delimter1 || COALESCE(inRef.Violation_Count, '') || Delimter1 || COALESCE(inRef.Global_Status, '') || Delimter1 || COALESCE(inRef.Alert_Count, '') || Delimter1;
+
+				DECLARE inAlertsList REFERENCE TO inRef.Alerts.Item[>];
+				WHILE LASTMOVE(inAlertsList) DO
+					SET respAlertId = COALESCE(respAlertId, '') || inAlertsList.Alert_Id || Delimter3;
+					SET respAlertStat = COALESCE(respAlertStat, '') || inAlertsList.Alert_Status || Delimter3;
+					MOVE inAlertsList NEXTSIBLING REPEAT TYPE NAME;
+				END WHILE;
+				SET respAlertId = TRIM(TRAILING Delimter3 FROM respAlertId);
+				SET respAlertStat = TRIM(TRAILING Delimter3 FROM respAlertStat);
+
+				SET resp = resp || COALESCE(respAlertId, '') || Delimter1 || COALESCE(respAlertStat, '') || Delimter1;
+
+				DECLARE inRecordsList REFERENCE TO inRef.Reports.Item[>];
+				WHILE LASTMOVE(inRecordsList) DO
+					SET respRecordsList = COALESCE(inRecordsList.Status, '') || Delimter4 || COALESCE(inRecordsList.Data, '') || Delimter4 || COALESCE(inRecordsList.Match, '') || Delimter4 || COALESCE(inRecordsList.Input_Bic, '') || Delimter4 || COALESCE(inRecordsList.Input_Address, '') || Delimter4 || COALESCE(inRecordsList.Input_City, '') || Delimter4 || COALESCE(inRecordsList.Input_Country, '') || Delimter4 || COALESCE(inRecordsList.Rank, '') || Delimter4 || COALESCE(inRecordsList.List_Name, '') || Delimter4 || COALESCE(inRecordsList.List_Date, '') || Delimter4 || COALESCE(inRecordsList.Entity_Id, '') || Delimter4 || COALESCE(inRecordsList.Category, '') || Delimter4 || COALESCE(inRecordsList.Remark, '') || Delimter4 || COALESCE(inRecordsList.Title, '') || Delimter4 || COALESCE(inRecordsList.Begin_Position, '') || Delimter4 || COALESCE(inRecordsList.End_Position, '') || Delimter4 || COALESCE(inRecordsList.Field, '') || Delimter4 || COALESCE(inRecordsList.Line, '') || Delimter4 || COALESCE(inRecordsList.Program, '') || Delimter4 || COALESCE(inRecordsList.DOB, '') || Delimter4 || COALESCE(inRecordsList.POB, '') || Delimter4 || COALESCE(inRecordsList.External_Id, '');
+
+					DECLARE inEntityList REFERENCE TO inRef.Reports.Item[I].Entities.Item[>];
+					WHILE LASTMOVE(inEntityList) DO
+						SET respEntityNameType = COALESCE(respEntityNameType, '') || COALESCE(inEntityList.Name_Type, '') || Delimter2;
+						SET respEntityName = COALESCE(respEntityName, '') || COALESCE(inEntityList.Name, '') || Delimter2;
+						MOVE inEntityList NEXTSIBLING REPEAT TYPE NAME;
+					END WHILE;
+					SET respEntityNameType = TRIM(TRAILING Delimter2 FROM respEntityNameType);
+					SET respEntityName = TRIM(TRAILING Delimter2 FROM respEntityName);
+
+					DECLARE inAddressList REFERENCE TO inRef.Reports.Item[I].Addresses.Item[>];
+					WHILE LASTMOVE(inAddressList) DO
+						SET respAddressAddress = COALESCE(respAddressAddress, '') || COALESCE(inEntityList.Address, '') || Delimter2;
+						SET respAddressCity = COALESCE(respAddressCity, '') || COALESCE(inEntityList.City, '') || Delimter2;
+						SET respAddressCountry = COALESCE(respAddressCountry, '') || COALESCE(inEntityList.Country, '') || Delimter2;
+						MOVE inAddressList NEXTSIBLING REPEAT TYPE NAME;
+					END WHILE;
+					SET respAddressAddress = TRIM(TRAILING Delimter2 FROM respAddressAddress);
+					SET respAddressCity = TRIM(TRAILING Delimter2 FROM respAddressCity);
+					SET respAddressCountry = TRIM(TRAILING Delimter2 FROM respAddressCountry);
+
+					SET I = I + 1;
+					SET resp = resp || COALESCE(respRecordsList, '') || Delimter4 || COALESCE(respEntityNameType, '') || Delimter4 || COALESCE(respEntityName, '') || Delimter4 || COALESCE(respAddressAddress, '') || Delimter4 || COALESCE(respAddressCity, '') || Delimter4 || COALESCE(respAddressCountry, '') || Delimter3;
+					SET Environment.response = resp;
+					SET respEntityNameType = NULL;
+					SET respEntityName = NULL;
+					SET respAddressAddress = NULL;
+					SET respAddressCity = NULL;
+					SET respAddressCountry = NULL;
+					MOVE inRecordsList NEXTSIBLING REPEAT TYPE NAME;
+				END WHILE;
+				SET delimitResp =  TRIM(TRAILING Delimter3 FROM CAST(Environment.response AS CHARACTER)); 
+			END IF;
+
+		ELSE
+			SET OutputRoot.JSON.Data.StatusCode = '1';
+			CREATE FIELD OutputRoot.JSON.Data.PayLoad.Errors IDENTITY (JSON.Array)Errors;
+			SET OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode = 'GATEWAY_TIMEOUT';
+			SET delimitResp = COALESCE(OutputRoot.JSON.Data.StatusCode, '1') || Delimiter1;
+			SET delimitResp = delimitResp || COALESCE(OutputRoot.JSON.Data.PayLoad.Errors.Item[1].ErrorCode, '') || Delimiter1 || Delimiter1 || Delimiter1 || Delimiter1|| Delimiter1|| Delimiter1|| Delimiter1;
+		END CASE;
+
+		SET Response_Length = CAST(LENGTH(delimitResp) AS CHARACTER);
+		SET HeaderLength = SUBSTRING(HeaderLength FROM 1 FOR (LENGTH(HeaderLength) - length(Response_Length))) || Response_Length;
+		SET delimitResp = HeaderLength || delimitResp;
+
+		SET OutputRoot = NULL;
+		SET OutputRoot.JSON.Data.Get_Scan_Info_Tcpip_Gateway = delimitResp;
+		SET outputChar = CAST(ASBITSTREAM(OutputRoot.JSON) AS CHARACTER CCSID COALESCE(InputRoot.Properties.CodedCharSetId, 437) ENCODING COALESCE(InputRoot.Properties.Encoding, 546));
+		SET OutputRoot = NULL;
+		/*LOGGING*/
+		CALL GenarateDBLogMessage2(Environment.Variable.channelName, Environment.Variable.applicationName, CAST(Environment.Variables.correlationId AS CHARACTER), '', CURRENT_TIMESTAMP, 'Info', comRef.WEB_SERVICE, Environment.Variables.Reply_Protocol, basicRef.APPLICATION_IDENTIFIER, 'OutputMsg', outputChar, outRefer);
+		PROPAGATE TO LABEL 'LOGGING';
+
+		SET OutputRoot = NULL;
+		SET OutputRoot.BLOB.BLOB = CAST(delimitResp AS BLOB CCSID 1208);
+		-- 'Environment.Variables.correlationId' is InputLocalEnvironment.TCPIP.Input.ConnectionDetails.Id
+		SET OutputLocalEnvironment.Destination.TCPIP.Output.Id = CAST(Environment.Variables.correlationId AS CHARACTER);
+	END;
+END MODULE;
