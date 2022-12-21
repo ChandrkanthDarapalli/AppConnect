@@ -12,6 +12,7 @@ CREATE COMPUTE MODULE SafeWatchSocket_Request
 		RETURN TRUE;
 	END;
 -- from repo to toolkit
+-- testing for PI fetch as well
 	CREATE PROCEDURE CopyEntireMessage() BEGIN
 		SET Environment.MQRFH2 = InputRoot.MQRFH2;
 		SET Environment.MQMD = InputRoot.MQMD;
